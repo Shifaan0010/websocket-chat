@@ -2,11 +2,6 @@ package wsmsg
 
 import (
 	"encoding/json"
-	"log"
-	"net"
-
-	"github.com/gobwas/ws"
-	"github.com/gobwas/ws/wsutil"
 )
 
 type MsgType int
@@ -17,52 +12,41 @@ const (
 	SendMsgEvent
 )
 
+func (msgType MsgType) String() string {
+	if msgType == None {
+		return "None"
+	} else if msgType == SendMsg {
+		return "SendMsg"
+	} else if msgType == SendMsgEvent {
+		return "SendMsgEvent"
+	} else {
+		return "Unknown"
+	}
+}
+
+type MsgData interface{}
+
 type WsMsg struct {
 	Type MsgType `json:"type"`
-	Data any     `json:"data"`
+	Data MsgData `json:"data,omitempty"`
+}
+
+type WsMsgRaw struct {
+	Type MsgType         `json:"type"`
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 type SendMsgData struct {
 	Text string `json:"text"`
 }
 
-func ProcessMessage(msg []byte, conn *net.Conn, conns *[]*net.Conn, chat *[]string) {
-	var msgData = json.RawMessage{}
-	var jsonMsg = WsMsg{
-		Data: &msgData,
-	}
+func ParseMessageType(msg []byte) (WsMsgRaw, error) {
+	var wsMsg = WsMsgRaw{}
 
-	err := json.Unmarshal(msg, &jsonMsg)
+	var err = json.Unmarshal(msg, &wsMsg)
 	if err != nil {
-		log.Printf("Error while parsing websocket message: %s", err.Error())
+		return WsMsgRaw{}, err
 	}
 
-	if jsonMsg.Type == SendMsg {
-		var sendMsgData = SendMsgData{}
-
-		err := json.Unmarshal(msgData, &sendMsgData)
-		if err != nil {
-			log.Printf("Error while parsing data for websocket message (type = Send): %s", err.Error())
-			return
-		}
-
-		var eventMsg = WsMsg{
-			Type: SendMsgEvent,
-			Data: sendMsgData,
-		}
-
-		eventMsgBytes, err := json.Marshal(eventMsg)
-		if err != nil {
-			log.Printf("Error while marshalling message: %s", err.Error())
-			return
-		}
-
-		for _, conn := range *conns {
-			wsutil.WriteServerMessage(*conn, ws.OpText, eventMsgBytes)
-		}
-
-		*chat = append(*chat, sendMsgData.Text)
-	} else {
-		log.Printf("Invalid message from websocket %v", conn)
-	}
+	return wsMsg, nil
 }

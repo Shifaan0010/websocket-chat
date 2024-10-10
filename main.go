@@ -10,8 +10,43 @@ import (
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 
-	"example.com/ws-chat/wsmsg"
+	"ws-chat/wsmsg"
 )
+
+func HandleWsMsg(msg []byte, conns *[]*net.Conn, chat *[]string) {
+	wsMsg, err := wsmsg.ParseMessageType(msg)
+	if err != nil {
+		log.Printf("Error while parsing websocket message: %s", err.Error())
+	}
+
+	if wsMsg.Type == wsmsg.SendMsg {
+		var msgData wsmsg.SendMsgData
+
+		err = json.Unmarshal(wsMsg.Data, &msgData)
+		if err != nil {
+			log.Printf("Error while parsing data for websocket message (type = %s): %s", wsMsg.Type, err.Error())
+			return
+		}
+
+		var eventMsg = wsmsg.WsMsg{
+			Type: wsmsg.SendMsgEvent,
+			Data: msgData,
+		}
+
+		eventMsgBytes, err := json.Marshal(eventMsg)
+		if err != nil {
+			log.Printf("Error while marshalling message: %s", err.Error())
+			return
+		}
+
+		for _, conn := range *conns {
+			wsutil.WriteServerMessage(*conn, ws.OpText, eventMsgBytes)
+		}
+
+		*chat = append(*chat, msgData.Text)
+	}
+
+}
 
 func wsHandler(w http.ResponseWriter, r *http.Request, conns *[]*net.Conn, chat *[]string) {
 	log.Println(r.Method + " " + r.Pattern)
@@ -39,7 +74,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request, conns *[]*net.Conn, chat 
 		}()
 
 		for {
-			var msgBytes, err = wsutil.ReadClientText(conn)
+			var msg, err = wsutil.ReadClientText(conn)
 			if err != nil {
 				log.Printf("%v Error: %#v %s", &conn, err, err.Error())
 
@@ -49,10 +84,9 @@ func wsHandler(w http.ResponseWriter, r *http.Request, conns *[]*net.Conn, chat 
 				}
 			}
 
-			var msg = string(msgBytes)
+			log.Printf("%v Recieved %s\n", &conn, string(msg))
 
-			log.Printf("%v Recieved %s\n", &conn, msg)
-			wsmsg.ProcessMessage(msgBytes, &conn, conns, chat)
+			HandleWsMsg(msg, conns, chat)
 
 			// err = wsutil.WriteServerMessage(conn, ws.OpText, msgBytes)
 			// if err != nil {
@@ -74,16 +108,12 @@ func cors(w http.ResponseWriter) {
 	w.Header().Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 }
 
+var chat []string = make([]string, 0)
+var conns []*net.Conn = make([]*net.Conn, 0)
+
 func main() {
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
-	
-	var chat []string = make([]string, 0)
-	var conns []*net.Conn = make([]*net.Conn, 0)
 
-	chat = append(chat, "abc")
-	chat = append(chat, "hello")
-	chat = append(chat, "world")
-	
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Println(r.Method + " " + r.Pattern)
 

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset='utf-8'>
+	<meta http-equiv='X-UA-Compatible' content='IE=edge'>
+	<title>Chat ws</title>
+	<meta name='viewport' content='width=device-width, initial-scale=1'>
+</head>
+
+<body>
+	<header>Chat ws</header>
+
+	<main id="chat-container">
+		<div id="chat-msgs"></div>
+		<div id="chat-input">
+			<input type="text" id="send-msg-text" />
+			<button type="submit" id="send-msg-btn">Send</button>
+		</div>
+	</main>
+</body>
+
+<style>
+	#chat-container {}
+
+	#chat-msgs {
+		border: 1px solid;
+		padding: 2px;
+		margin: 2px 0;
+	}
+
+	#chat-input {}
+
+	.msg {}
+</style>
+
+<script>
+	function newMsgDiv(msg_text) {
+		const msg_node = document.createElement("div");
+
+		msg_node.classList.add("msg")
+
+		msg_node.append(document.createTextNode(msg_text))
+
+		return msg_node;
+	}
+
+	const chat_msgs_div = document.getElementById("chat-msgs");
+	const send_msg_text = document.getElementById("send-msg-text");
+	const send_msg_btn = document.getElementById("send-msg-btn");
+
+	const api_host = "localhost:8080";
+
+	// (async () => {
+	// 	const chat_resp = await fetch(api_url + "/chat")
+	// 	const chat_msgs = await chat_resp.json();
+
+	// 	for (let i = 0; i < chat_msgs.length; i += 1) {
+	// 		chat_msgs_div.append(newMsgDiv(chat_msgs[i]))
+	// 	}
+	// })()
+
+	const chat_ws = new WebSocket(`ws://${api_host}/chat-ws`);
+
+	chat_ws.addEventListener("open", (event) => {
+		// chat_ws.send(JSON.stringify({
+		// 	"op": "GetMessages",
+		// 	"limit": 10,
+		// }));
+	});
+
+	chat_ws.addEventListener("message", (event) => {
+		console.log("Message from server:", event.data);
+
+		const json_msg = JSON.parse(event.data);
+
+		if (json_msg["type"] == 2) { // SendMsgEvent
+			const new_msg_text = json_msg["data"]["text"];
+
+			chat_msgs_div.append(newMsgDiv(new_msg_text))
+		}
+	});
+
+	chat_ws.addEventListener("close", (event) => {
+		console.log("websocket closed", event);
+	})
+
+	chat_ws.addEventListener("error", (event) => {
+		console.log("websocket error", event);
+	})
+
+	send_msg_btn.addEventListener("click", (event) => {
+		const msg_text = send_msg_text.value;
+
+		console.log(`Clicked send, text = "${msg_text}"`);
+
+		if (msg_text?.length > 0) {
+			chat_ws.send(JSON.stringify({
+				"type": 1, // Send
+				"data": {
+					"text": msg_text,
+				},
+			}));
+		}
+	});
+</script>
+
+</html>

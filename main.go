@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"slices"
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -12,101 +14,29 @@ import (
 	"ws-chat/wsmsg"
 )
 
-func HandleWsMsg(msg []byte, chatBroadcastChan chan <- wsmsg.SendMsgData) {
-	wsMsg, err := wsmsg.ParseMessageType(msg)
-	if err != nil {
-		log.Printf("Error while parsing websocket message: %s", err.Error())
-	}
-
-	if wsMsg.Type == wsmsg.SendMsg {
-		var msgData wsmsg.SendMsgData
-
-		err = json.Unmarshal(wsMsg.Data, &msgData)
-		if err != nil {
-			log.Printf("Error while parsing data for websocket message (type = %s): %s", wsMsg.Type, err.Error())
-			return
-		}
-
-		log.Println("Sending to broadcaster")
-
-		chatBroadcastChan <- msgData
-	}
-
-}
+// func HandleWsMsg(msg []byte, chatBroadcastChan chan<- wsmsg.SendMsgData) {
+// 	wsMsg, err := wsmsg.ParseMessageType(msg)
+// 	if err != nil {
+// 		log.Printf("Error while parsing websocket message: %s", err.Error())
+// 	}
+//
+// 	if wsMsg.Type == wsmsg.SendMsg {
+// 		var msgData wsmsg.SendMsgData
+//
+// 		err = json.Unmarshal(wsMsg.Data, &msgData)
+// 		if err != nil {
+// 			log.Printf("Error while parsing data for websocket message (type = %s): %s", wsMsg.Type, err.Error())
+// 			return
+// 		}
+//
+// 		log.Printf("Sending %#v to broadcaster", msgData)
+//
+// 		chatBroadcastChan <- msgData
+// 	}
+//
+// }
 
 func wsHandler(w http.ResponseWriter, r *http.Request, broadcaster *ChatBroadcaster) {
-	conn, _, _, err := ws.UpgradeHTTP(r, w)
-	if err != nil {
-		// handle error
-		log.Printf("Error while creating websocket: %s", err.Error())
-	}
-
-	log.Printf("Created websocket %v\n", &conn)
-
-	wsconn := WsConn{
-		conn:     &conn,
-		sendChan: make(chan wsmsg.SendMsgData, 10),
-	}
-	broadcaster.ConnChan <- wsconn
-
-	go func() {
-		defer func() {
-			close(wsconn.sendChan)
-			(*wsconn.conn).Close()
-		}()
-
-
-		for {
-			log.Printf("Ws %p: Loop", wsconn.conn)
-
-			select {
-			case chatMsg := <- wsconn.sendChan:
-				log.Printf("%p Recieved chat msg event", wsconn.conn)
-
-				eventMsg := wsmsg.WsMsg{
-					Type: wsmsg.SendMsgEvent,
-					Data: chatMsg,
-				}
-
-				eventMsgBytes, err := json.Marshal(eventMsg)
-				if err != nil {
-					log.Printf("Error while marshalling message: %s", err.Error())
-					break
-				}
-				
-				err = wsutil.WriteServerText(*wsconn.conn, eventMsgBytes)
-				if err != nil {
-					log.Printf("%p Error: %s", wsconn.conn, err.Error())
-				}
-
-
-			default:
-				var msg, err = wsutil.ReadClientText(conn)
-				if err != nil {
-					log.Printf("%v Error: %#v %s", &conn, err, err.Error())
-
-					var _, isClosed = err.(wsutil.ClosedError)
-					if isClosed || err.Error() == "EOF" {
-						return
-					}
-				}
-
-				log.Printf("%v Recieved %s\n", &conn, string(msg))
-
-				HandleWsMsg(msg, broadcaster.ChatChan)
-
-				// err = wsutil.WriteServerMessage(conn, ws.OpText, msgBytes)
-				// if err != nil {
-				// 	log.Printf("%v Error: %#v %s", &conn, err, err.Error())
-
-				// 	var _, isNetOpErr = err.(*net.OpError)
-				// 	if isNetOpErr {
-				// 		break
-				// 	}
-				// }
-			}
-		}
-	}()
 }
 
 func cors(w http.ResponseWriter) {
@@ -116,23 +46,167 @@ func cors(w http.ResponseWriter) {
 	w.Header().Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 }
 
-type WsConn struct {
+type ChatWsConn struct {
 	conn     *net.Conn
-	sendChan chan wsmsg.SendMsgData
+	SendChan chan<- wsmsg.SendMsgData // sending to this channel will send a SendMsgEvent to the websocket
+	RecvChan <-chan wsmsg.SendMsgData // this channel emits recieved SendMsg messages from the websocket
+}
+
+func StartChatRecvChan(conn *net.Conn, recvChan chan wsmsg.SendMsgData, done <-chan bool) <-chan error {
+	// defer (*chatws.conn).Close()
+	// defer close(sendChan)
+	// defer close(recvChan)
+
+	log.Printf("Ws [%p]: Starting Recieve goroutine", conn)
+
+	errChan := make(chan error)
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+
+			default:
+				header, err := ws.ReadHeader(*conn)
+				if err != nil {
+					log.Printf("Ws [%p] Reciever: Error %s, closing connection", conn, err.Error())
+					errChan <- err
+					return
+				}
+
+				if header.OpCode == ws.OpClose {
+					log.Printf("Ws [%p] Reciever: Recieved close opcode, closing connection", conn)
+					errChan <- nil
+					return
+				} else if header.OpCode != ws.OpText {
+					continue
+				}
+
+				msg := make([]byte, header.Length)
+				_, err = io.ReadFull(*conn, msg)
+
+				if err != nil {
+					log.Printf("Ws [%p] Reciever: Error %s, closing connection", conn, err.Error())
+					errChan <- err
+					return
+				}
+
+				if header.Masked {
+					ws.Cipher(msg, header.Mask, 0)
+				}
+
+				log.Printf("Ws [%p] Reciever: Recieved msg [%s]", conn, string(msg))
+
+				wsMsg, err := wsmsg.ParseMessageType(msg)
+				if err != nil {
+					log.Printf("Ws [%p] Reciever: Error while parsing websocket message: %s", conn, err.Error())
+				}
+
+				if wsMsg.Type == wsmsg.SendMsg {
+					var msgData wsmsg.SendMsgData
+
+					err = json.Unmarshal(wsMsg.Data, &msgData)
+					if err != nil {
+						log.Printf("Ws [%p] Reciever: Error while parsing data for websocket message (type = %s): %s", conn, wsMsg.Type, err.Error())
+					}
+
+					log.Printf("Ws [%p] Reciever: Sending %#v to recv channel", conn, msgData)
+
+					recvChan <- msgData
+				}
+			}
+		}
+	}()
+
+	return errChan
+}
+
+func StartChatSendChan(conn *net.Conn, sendChan chan wsmsg.SendMsgData, done <-chan bool) <-chan error {
+	log.Printf("Ws [%p]: Starting Send goroutine", conn)
+
+	errChan := make(chan error)
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+
+			case chatMsg := <-sendChan:
+
+				log.Printf("Ws [%p] Sender: Recieved chat msg event", conn)
+
+				eventMsg := wsmsg.WsMsg{
+					Type: wsmsg.SendMsgEvent,
+					Data: chatMsg,
+				}
+
+				eventMsgBytes, err := json.Marshal(eventMsg)
+				if err != nil {
+					log.Printf("Ws [%p] Sender: Error while marshalling message: %s", conn, err.Error())
+				}
+
+				err = wsutil.WriteServerText(*conn, eventMsgBytes)
+				if err != nil {
+					log.Printf("Ws [%p] Sender: Error: %s", conn, err.Error())
+				}
+			}
+		}
+	}()
+
+	return errChan
+}
+
+func NewChatWsConn(conn *net.Conn) ChatWsConn {
+	sendChan := make(chan wsmsg.SendMsgData, 10)
+	recvChan := make(chan wsmsg.SendMsgData, 10)
+
+	wsconn := ChatWsConn{
+		conn:     conn,
+		SendChan: sendChan,
+		RecvChan: recvChan,
+	}
+
+	// done := make(chan bool)
+	recvDone := make(chan bool)
+	sendDone := make(chan bool)
+
+	recvErrChan := StartChatRecvChan(conn, recvChan, recvDone)
+	sendErrChan := StartChatSendChan(conn, sendChan, sendDone)
+
+	go func() {
+		select {
+		case err := <-recvErrChan:
+			log.Printf("Ws [%p]: Recieved error [%s] from reciever chan, closing websocket", conn, err)
+			sendDone <- true
+
+		case err := <-sendErrChan:
+			log.Printf("Ws [%p]: Recieved error [%s] from sender chan, closing websocket", conn, err)
+			recvDone <- true
+		}
+
+		log.Printf("Closing chat ws [%p] and its send/recieve channels", conn)
+		(*conn).Close()
+		close(sendChan)
+		close(recvChan)
+	}()
+
+	return wsconn
 }
 
 type ChatBroadcaster struct {
 	ChatChan chan wsmsg.SendMsgData
-	ConnChan chan WsConn
+	ConnChan chan ChatWsConn
 
-	conns []WsConn
+	conns []ChatWsConn
 }
 
 func NewChatBroadcaster() ChatBroadcaster {
 	var chat = make(chan wsmsg.SendMsgData, 10)
-	var newConns = make(chan WsConn, 10)
+	var newConns = make(chan ChatWsConn, 10)
 
-	var conns = make([]WsConn, 0)
+	var conns = make([]ChatWsConn, 0)
 
 	return ChatBroadcaster{
 		ChatChan: chat,
@@ -148,16 +222,27 @@ func (broadcaster *ChatBroadcaster) Start() {
 		log.Println("Broadcaster: Loop")
 
 		select {
-		case msg := <- broadcaster.ChatChan:
+		case msg := <-broadcaster.ChatChan:
 			log.Printf("Broadcaster: received Chat msg %#v", msg)
 			for _, conn := range broadcaster.conns {
 				log.Printf("Broadcaster: sending Chat msg %#v to %p", msg, conn.conn)
-				conn.sendChan <- msg
+				conn.SendChan <- msg
 			}
 
 		case conn := <-broadcaster.ConnChan:
 			log.Printf("Broadcaster: New connection")
 			broadcaster.conns = append(broadcaster.conns, conn)
+			go func() {
+				for chatMsg := range conn.RecvChan {
+					broadcaster.ChatChan <- chatMsg
+				}
+
+				log.Printf("Broadcaster: recv channel closed for ws [%p], removing websocket from active connections", conn)
+				broadcaster.conns = slices.DeleteFunc(broadcaster.conns, func(elem ChatWsConn) bool {
+					return elem.conn == conn.conn
+				})
+				log.Printf("Broadcaster: Active connections %v", broadcaster.conns)
+			}()
 			log.Printf("Broadcaster: Active connections %v", broadcaster.conns)
 		}
 	}
@@ -166,7 +251,7 @@ func (broadcaster *ChatBroadcaster) Start() {
 func main() {
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
-	var chatBroadcaster = NewChatBroadcaster()
+	chatBroadcaster := NewChatBroadcaster()
 	go chatBroadcaster.Start()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +282,16 @@ func main() {
 		log.Printf(r.Method + " " + r.Pattern)
 
 		if r.Method == http.MethodGet {
-			wsHandler(w, r, &chatBroadcaster)
+			conn, _, _, err := ws.UpgradeHTTP(r, w)
+			if err != nil {
+				// handle error
+				log.Printf("Error while creating websocket: %s", err.Error())
+			}
+
+			log.Printf("Created websocket %p\n", &conn)
+			wsconn := NewChatWsConn(&conn)
+
+			chatBroadcaster.ConnChan <- wsconn
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}

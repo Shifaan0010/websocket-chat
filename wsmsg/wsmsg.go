@@ -6,24 +6,6 @@ import (
 
 type MsgType int
 
-const (
-	None MsgType = iota
-	SendMsg
-	SendMsgEvent
-)
-
-func (msgType MsgType) String() string {
-	if msgType == None {
-		return "None"
-	} else if msgType == SendMsg {
-		return "SendMsg"
-	} else if msgType == SendMsgEvent {
-		return "SendMsgEvent"
-	} else {
-		return "Unknown"
-	}
-}
-
 type MsgData interface{}
 
 type WsMsg struct {
@@ -36,8 +18,26 @@ type WsMsgRaw struct {
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
+const (
+	None MsgType = iota
+	SendMsg
+	SendMsgEvent
+)
+
 type SendMsgData struct {
 	Text string `json:"text"`
+}
+
+func (msgType MsgType) String() string {
+	if msgType == None {
+		return "None"
+	} else if msgType == SendMsg {
+		return "SendMsg"
+	} else if msgType == SendMsgEvent {
+		return "SendMsgEvent"
+	} else {
+		return "Unknown"
+	}
 }
 
 func ParseMessageType(msg []byte) (WsMsgRaw, error) {

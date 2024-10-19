@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"io"
 	"log"
 	"net"
@@ -63,22 +62,17 @@ func StartChatRecvChan(conn *net.Conn, recvChan chan wsmsg.SendMsgData, done <-c
 
 				log.Printf("Ws [%p] Reciever: Recieved msg [%s]", conn, string(msg))
 
-				wsMsg, err := wsmsg.ParseMessageType(msg)
+				msgType, msgData, err := wsmsg.ParseMessage(msg)
 				if err != nil {
 					log.Printf("Ws [%p] Reciever: Error while parsing websocket message: %s", conn, err.Error())
 				}
 
-				if wsMsg.Type == wsmsg.SendMsg {
-					var msgData wsmsg.SendMsgData
+				if msgType == wsmsg.SendMsg {
+					var sendMsgData = msgData.(wsmsg.SendMsgData)
 
-					err = json.Unmarshal(wsMsg.Data, &msgData)
-					if err != nil {
-						log.Printf("Ws [%p] Reciever: Error while parsing data for websocket message (type = %s): %s", conn, wsMsg.Type, err.Error())
-					}
+					log.Printf("Ws [%p] Reciever: Sending %#v to recv channel", conn, sendMsgData)
 
-					log.Printf("Ws [%p] Reciever: Sending %#v to recv channel", conn, msgData)
-
-					recvChan <- msgData
+					recvChan <- sendMsgData
 				}
 			}
 		}
@@ -107,9 +101,9 @@ func StartChatSendChan(conn *net.Conn, sendChan chan wsmsg.SendMsgData, done <-c
 					Data: chatMsg,
 				}
 
-				eventMsgBytes, err := json.Marshal(eventMsg)
+				eventMsgBytes, err := wsmsg.EncodeMessage(eventMsg)
 				if err != nil {
-					log.Printf("Ws [%p] Sender: Error while marshalling message: %s", conn, err.Error())
+					log.Printf("Ws [%p] Sender: Error while encoding message: %s", conn, err.Error())
 				}
 
 				err = wsutil.WriteServerText(*conn, eventMsgBytes)

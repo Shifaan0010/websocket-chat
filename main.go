@@ -20,7 +20,7 @@ func main() {
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
 	chatBroadcaster := NewChatBroadcaster()
-	go chatBroadcaster.Start(runtime.NumCPU())
+	chatBroadcaster.Start(runtime.NumCPU())
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Println(r.Method + " " + r.Pattern)

@@ -2,6 +2,7 @@ package wsmsg
 
 import (
 	"encoding/json"
+	"log"
 )
 
 type MsgType int
@@ -13,7 +14,7 @@ type WsMsg struct {
 	Data MsgData `json:"data,omitempty"`
 }
 
-type WsMsgRaw struct {
+type wsMsgRaw struct {
 	Type MsgType         `json:"type"`
 	Data json.RawMessage `json:"data,omitempty"`
 }
@@ -40,13 +41,49 @@ func (msgType MsgType) String() string {
 	}
 }
 
-func ParseMessageType(msg []byte) (WsMsgRaw, error) {
-	var wsMsg = WsMsgRaw{}
+func parseMessageType(msg []byte) (wsMsgRaw, error) {
+	var wsMsg = wsMsgRaw{}
 
 	var err = json.Unmarshal(msg, &wsMsg)
 	if err != nil {
-		return WsMsgRaw{}, err
+		return wsMsgRaw{}, err
 	}
 
 	return wsMsg, nil
+}
+
+func ParseMessage(msg []byte) (MsgType, MsgData, error) {
+	msgRaw, err := parseMessageType(msg)
+	if err != nil {
+		log.Printf("Error while parsing websocket message: %s", err.Error())
+		return None, nil, err
+	}
+
+	msgType := msgRaw.Type
+
+	var msgData MsgData = nil
+
+	if msgType == SendMsg {
+		var sendMsgData SendMsgData
+
+		err = json.Unmarshal(msgRaw.Data, &sendMsgData)
+		if err != nil {
+			log.Printf("Error while parsing data for websocket message (type = %s): %s", msgType, err.Error())
+			return None, nil, err
+		}
+
+		msgData = sendMsgData
+	}
+
+	return msgType, msgData, nil
+}
+
+func EncodeMessage(msg WsMsg) ([]byte, error) {
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Error while marshalling message: %s", err.Error())
+		return nil, err
+	}
+
+	return msgBytes, nil
 }

@@ -9,12 +9,13 @@
 
 # But not these files...
 !/.gitignore
+!/index.html
+!/dockerfile
+!/.dockerignore
 
 !*.go
 !go.sum
 !go.mod
-
-!index.html
 
 !README.md
 !LICENSE

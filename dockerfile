@@ -2,25 +2,39 @@
 
 # ------------------------------------------------------------------------------
 
-FROM --platform=$BUILDPLATFORM golang:1.23 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS base
 
-ARG TARGETOS
-ARG TARGETARCH
+ENV CGO_ENABLED=0
 
 WORKDIR /app
 
-# download dependencies first
+# download and cache dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . ./
 
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /ws-chat .
+# ------------------------------------------------------------------------------
+
+FROM base AS build
+
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+	GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /ws-chat .
+
+# ------------------------------------------------------------------------------
+
+FROM base AS test
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+go test -v .
 
 # ------------------------------------------------------------------------------
 
 FROM scratch
 
-COPY --from=builder /ws-chat /ws-chat
+COPY --from=build /ws-chat /ws-chat
 
 ENTRYPOINT ["/ws-chat"]
